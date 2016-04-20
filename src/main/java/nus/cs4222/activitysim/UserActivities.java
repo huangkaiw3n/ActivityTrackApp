@@ -3,8 +3,8 @@ package nus.cs4222.activitysim;
 /**
    Enumeration of all user activities.
 
-   @note  Add any new activity names here, with the SAME names as in your ActivitySim's enumeration.
+   @note  Add any new activity names here, with the SAME names as in the SensorLogApp's enumeration.
  */
 public enum UserActivities {
-    Confirm , IDLE_INDOOR , IDLE_OUTDOOR , WALKING , BUS , TRAIN , CAR , OTHER , INCORRECT
+    Confirm , IDLE_INDOOR , IDLE_OUTDOOR , WALKING , BUS , TRAIN , CAR , OTHER , INCORRECT, NONE
 }

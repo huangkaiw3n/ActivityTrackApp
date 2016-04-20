@@ -7,6 +7,8 @@ import java.text.*;
 import android.hardware.*;
 import android.util.*;
 
+import net.qxcg.svy21.*;
+
 /**
    Class containing the activity detection algorithm.
 
@@ -48,6 +50,15 @@ public class ActivityDetection {
     public void initDetection() 
         throws Exception {
         // Add initialisation code here, if any
+
+        // Here, we just show a dummy example of a timer that runs every 10 min, 
+        //  outputting WALKING and INDOOR alternatively.
+        // You will most likely not need to use Timers at all, it is just 
+        //  provided for convenience if you require.
+        // REMOVE THIS DUMMY CODE (2 lines below), otherwise it will mess up your algorithm's output
+//        SimulatorTimer timer = new SimulatorTimer();
+//        timer.schedule( this.task ,        // Task to be executed
+//                        10 * 60 * 1000 );  // Delay in millisec (10 min)
     }
 
     /** De-initialises the detection algorithm. */
@@ -121,6 +132,86 @@ public class ActivityDetection {
                                          float y , 
                                          float z , 
                                          int accuracy ) {
+        if (isFirstMagReading) {
+            magXvalues = new float[NUM_AVERAGES_MX];
+            magYvalues = new float[NUM_AVERAGES_MX];
+            magRunningAvgIndex = 0;
+            isFirstMagReading = false;
+            magCounter = 0;
+            phoneMovedTimestamp = timestamp;
+            mainAlgo.run();
+        }
+
+        magXvalues[magRunningAvgIndex] = x;
+        magYvalues[magRunningAvgIndex] = y;
+        magRunningAvgIndex = (magRunningAvgIndex + 1) % NUM_AVERAGES_MX;
+
+        if (magCounter < NUM_AVERAGES_MX-1){
+            magCounter++;
+            return;
+        }
+
+        double sumX, sumY;
+        sumX = sumY = 0;
+        for (float val : magXvalues) sumX += val;
+        for (float val : magYvalues) sumY += val;
+        mxAvg = (int) (sumX / NUM_AVERAGES_MX);
+        myAvg = (int) (sumY / NUM_AVERAGES_MX);
+
+        int diffX = Math.abs(mxAvg - (int) x);
+        int diffY = Math.abs(myAvg - (int) y);
+
+        if (diffX > MX_THRESHOLD || diffY > MX_THRESHOLD) {
+            if (!isPhoneMoving) {
+                isPhoneMoving = true;
+                phoneMovedTimestamp = timestamp;
+//                System.out.println("                    Moving!" + convertUnixTimeToReadableString( ActivitySimulator.currentTimeMillis() ));
+            }
+        }
+        else {
+            if (isPhoneMoving) {
+                isPhoneMoving = false;
+                phoneMovedTimestamp = timestamp;
+//                System.out.println("                    Stable!" + convertUnixTimeToReadableString( ActivitySimulator.currentTimeMillis() ));
+            }
+        }
+
+        phoneMovementRecord[magRunningAvgIndex] = isPhoneMoving;
+
+        checkMagStill(timestamp);
+
+//        if (timestamp <=1459053128109l)
+//            System.out.println(convertUnixTimeToReadableString(timestamp) + " " + x + " " + isMagStillForDuration + " " + isPhoneMoving + " " + isFluctuating);
+    }
+
+    /**
+     Checks if Mag was still for more than xxx milliseconds.
+     @param   timestamp    Timestamp of this sensor event
+     */
+    private void checkMagStill(long timestamp){
+
+        if (timestamp - phoneMovedTimestamp > MAG_STABLE_DURATION && !isPhoneMoving){ //phone still for more than x seconds
+            isMagStillForDuration = true;
+            isFluctuating = false;
+            return;
+        }
+        else if (timestamp - phoneMovedTimestamp > MAG_MOVING_DURATION && isPhoneMoving){ //phone moved for more than x seconds
+            isMagStillForDuration = false;
+            isFluctuating = false;
+            return;
+        }
+
+        if (currentState == UserActivities.NONE)
+            return;
+
+        if (!isFluctuating) {
+            fluctuatingTimestamp = timestamp;
+            isFluctuating = true;
+        }
+        else if (timestamp - fluctuatingTimestamp > MAG_FLUCTUATING_DURATION){ //phone was unstable for more than x seconds
+            isMagStillForDuration = false;
+            return;
+        }
     }
 
     /** 
@@ -181,6 +272,30 @@ public class ActivityDetection {
     public void onLightSensorChanged( long timestamp , 
                                       float light , 
                                       int accuracy ) {
+
+        if (isFirstLuxReading){
+            luxValues = new float[NUM_AVERAGES_LUX];
+            isFirstLuxReading = false;
+            luxRunningAverageIndex = 0;
+            luxCounter = 0;
+        }
+
+        float sum = 0;
+
+        luxValues[luxRunningAverageIndex] = light;
+        luxRunningAverageIndex = (luxRunningAverageIndex + 1) % NUM_AVERAGES_LUX;
+
+        if (luxCounter < NUM_AVERAGES_LUX){
+            luxCounter++;
+        }
+
+        for (float val : luxValues) sum += val;
+        luxAvg = (sum / luxCounter);
+
+        if (luxAvg < LIGHT_THRESHOLD)
+            isLowLight = true;
+        else
+            isLowLight = false;
     }
 
     /** 
@@ -215,6 +330,36 @@ public class ActivityDetection {
                                          double altitude , 
                                          float bearing , 
                                          float speed ) {
+
+        if (provider.equals("gps") && isFirstLocReading){
+            isFirstLocReading = false;
+            previousCoord = new LatLonCoordinate(latitude,longitude).asSVY21();
+            previousCoordTimestamp = timestamp;
+        }
+
+        if (provider.equals("gps") && !isFirstLocReading && timestamp != previousCoordTimestamp) {
+            SVY21Coordinate currentCoord = new LatLonCoordinate(latitude, longitude).asSVY21();
+            changeInDistance = Math.sqrt(((Math.pow(currentCoord.getEasting() - previousCoord.getEasting(), 2)) +
+                    (Math.pow(currentCoord.getNorthing() - previousCoord.getNorthing(), 2))));
+            derivedSpeed = (float) (changeInDistance / ((timestamp - previousCoordTimestamp) / 1000));
+            previousCoord = currentCoord;
+            previousCoordTimestamp = timestamp;
+//            System.out.println("DistanceChange: " + changeInDistance + " " + "Speed: " + speed + " DerivedSpeed: " + derivedSpeed + " " + convertUnixTimeToReadableString(ActivitySimulator.currentTimeMillis()) + " Bus: " + isOnBus);
+
+            if (derivedSpeed > SPEED_THRESHOLD){
+                isSpeedHigh = true;
+                isOnVehicle = true;
+            }
+            else {
+                if (isSpeedHigh) {
+                    slowBusTimestamp = timestamp;
+                }
+                if (timestamp - slowBusTimestamp > LOW_SPEED_DURATION){ //delay to decide user is now off vehicle
+                    isOnVehicle = false;
+                }
+                isSpeedHigh = false;
+            }
+        }
     }
 
     /** Helper method to convert UNIX millis time into a human-readable string. */
@@ -224,4 +369,225 @@ public class ActivityDetection {
 
     /** To format the UNIX millis time as a human-readable string. */
     private static final SimpleDateFormat sdf = new SimpleDateFormat( "yyyy-MM-dd-h-mm-ssa" );
+
+    private void executeLater(Runnable toRun, int mililiseconds){
+        SimulatorTimer timer = new SimulatorTimer();
+        timer.schedule(toRun, mililiseconds);
+    }
+
+    private void outputStateVechicle(){
+        ActivitySimulator.outputDetectedActivity(UserActivities.BUS);
+        currentState = UserActivities.BUS;
+        lastStateChangeTimestamp = ActivitySimulator.currentTimeMillis();
+    }
+
+    private void outputStateWalking(){
+        ActivitySimulator.outputDetectedActivity(UserActivities.WALKING);
+        currentState = UserActivities.WALKING;
+        lastStateChangeTimestamp = ActivitySimulator.currentTimeMillis();
+    }
+
+    private void outputStateIdleIndoor(){
+        ActivitySimulator.outputDetectedActivity(UserActivities.IDLE_INDOOR);
+        currentState = UserActivities.IDLE_INDOOR;
+        lastStateChangeTimestamp = ActivitySimulator.currentTimeMillis();
+    }
+
+    private void outputStateIdleOutdoor(){
+        ActivitySimulator.outputDetectedActivity(UserActivities.IDLE_OUTDOOR);
+        currentState = UserActivities.IDLE_OUTDOOR;
+        lastStateChangeTimestamp = ActivitySimulator.currentTimeMillis();
+    }
+
+    private void vehicleOrWalking(){
+        if(isOnVehicle)
+            outputStateVechicle();
+        else
+            outputStateWalking();
+    }
+
+    private void idlingIndoorOrOutdoor(){
+        if(isLowLight)
+            outputStateIdleIndoor();
+        else
+            outputStateIdleOutdoor();
+    }
+
+    private boolean determineStability(){
+        int positives = 0, negatives = 0;
+
+        for (boolean val: phoneMovementRecord){
+            if (val)
+                positives++;
+            else
+                negatives++;
+        }
+
+        if (positives > negatives)
+            return true;
+        else
+            return false;
+    }
+
+    private Runnable mainAlgo = new Runnable() {
+        public void run() {
+            if (mainAlgoFirstRun){
+                executeLater(mainAlgo, MAINALGO_INITIAL_DELAY);
+                mainAlgoFirstRun = false;
+                return;
+            }
+            else
+                executeLater(mainAlgo, MAINALGO_POLL_DELAY);
+
+            switch (currentState){
+                case NONE: {
+                    if (isMagStillForDuration)
+                        idlingIndoorOrOutdoor();
+                    else
+                        vehicleOrWalking();
+                    break;
+                }
+                case IDLE_INDOOR: {
+                    if (ActivitySimulator.currentTimeMillis() - lastStateChangeTimestamp < MAINALGO_STATECHANGE_MINTIME)
+                        return;
+                    if (isMagStillForDuration) {
+                        if (isLowLight)
+                            return;
+                        else
+                            outputStateIdleOutdoor();
+                    } else if (!isFluctuating)
+                        vehicleOrWalking();
+                    else{
+                        if(determineStability())
+                            vehicleOrWalking();
+                        else
+                            idlingIndoorOrOutdoor();
+                    }
+                    break;
+                }
+                case IDLE_OUTDOOR: {
+                    if (ActivitySimulator.currentTimeMillis() - lastStateChangeTimestamp < MAINALGO_STATECHANGE_MINTIME)
+                        return;
+                    if (isMagStillForDuration) {
+                        if (!isLowLight)
+                            return;
+                        else
+                            outputStateIdleIndoor();
+                    } else if (!isFluctuating)
+                        vehicleOrWalking();
+                    else{
+                        if(determineStability())
+                            vehicleOrWalking();
+                        else
+                            idlingIndoorOrOutdoor();
+                    }
+                    break;
+                }
+                case WALKING: {
+                    if (ActivitySimulator.currentTimeMillis() - lastStateChangeTimestamp < MAINALGO_STATECHANGE_MINTIME)
+                        return;
+                    if (!isMagStillForDuration) {
+                        if (!isOnVehicle)
+                            return;
+                        else
+                            outputStateVechicle();
+                    }
+                    else
+                        idlingIndoorOrOutdoor();
+                    break;
+                }
+                case BUS: {
+                    if (ActivitySimulator.currentTimeMillis() - lastStateChangeTimestamp < MAINALGO_STATECHANGE_MINTIME)
+                        return;
+                    if (isOnVehicle)
+                        return;
+                    else if (isMagStillForDuration)
+                        idlingIndoorOrOutdoor();
+                    else
+                        outputStateWalking();
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    };
+
+    //Variables for Mag Stabilisation detection
+    private boolean isFirstMagReading = true;
+    private boolean isPhoneMoving = false;
+    private long phoneMovedTimestamp = 0;
+    private float[] magXvalues, magYvalues;
+    private int mxAvg, myAvg;
+    private int magRunningAvgIndex;
+    private static final int NUM_AVERAGES_MX = 40;
+    private int magCounter;
+    private long fluctuatingTimestamp = 0;
+    private boolean isFluctuating = false;
+    private boolean isMagStillForDuration = true;
+    private boolean[] phoneMovementRecord = new boolean[40];
+
+    //Variables for Loc Data processing
+    private boolean isFirstLocReading = true;
+    private double changeInDistance = 0;
+    private float derivedSpeed = 0;
+    private SVY21Coordinate previousCoord;
+    private long previousCoordTimestamp;
+    private boolean isSpeedHigh = false;
+    private boolean isOnVehicle = false;
+
+    //Variables Lux Data processing
+    private boolean isLowLight = false;
+    private float[] luxValues;
+    private boolean isFirstLuxReading = true;
+    private static final int NUM_AVERAGES_LUX = 7;
+    private float luxAvg;
+    private int luxRunningAverageIndex;
+    private int luxCounter;
+
+    //Main algo
+    private UserActivities currentState = UserActivities.NONE;
+    private boolean mainAlgoFirstRun = true;
+    private long slowBusTimestamp = 0;
+    private long lastStateChangeTimestamp = 0;
+
+    /* ------------ Delays AND Variables for Tweaking Algo Performance ---------- */
+    /* -------------------------------------------------------------------------- */
+
+    //User is moving if the current mag x or current mag y values differs with the
+    //running average of the mag x or mag y values by this threshold.
+    private static final int MX_THRESHOLD = 3;
+
+    //User is considered to be Idling if mag was completely stable (not moving) for this duration
+    private static final int MAG_STABLE_DURATION = 30000;
+
+    //User is either Walking or Vechicle if mag was continuously unstable (Moving) for this duration
+    private static final int MAG_MOVING_DURATION = 15000;
+
+    //If Mag was not completely stable nor was it continuously unstable after this duration, then mag is fluctuating.
+    //Decision of User is idling or not will then be based on whether the majority of the previous readings was Moving
+    //or not moving.
+    private static final int MAG_FLUCTUATING_DURATION = 40000;
+
+    //If speed has been low for longer than this duration, user is considered to be off vehicle
+    private static final float LOW_SPEED_DURATION = 130000;
+
+    //User is on vehicle if speed exceeds this threshold. If speed is lower than this threshold for LOW_SPEED_DURATION,
+    //user is no longer on vechicle
+    private static final float SPEED_THRESHOLD = 5;
+
+    //If light is below this threshold, user is indoors, else, outdoors.
+    private static final float LIGHT_THRESHOLD = 350f;
+
+    //Initial delay to collect sensory data before outputing the first state
+    private static final int MAINALGO_INITIAL_DELAY = 70000;
+
+    //Rate the main algo is called, i.e, every 2000ms.
+    private static final int MAINALGO_POLL_DELAY = 2000;
+
+    //Minimum elapsed time to allow a state change after the state has just been updated
+    private static final int MAINALGO_STATECHANGE_MINTIME = 20000;
+
+    /* -------------------------------------------------------------------------- */
+    /* -------------------------------------------------------------------------- */
 }
